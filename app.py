@@ -7,10 +7,6 @@ from urllib.parse import urlencode
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret")
 
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
-
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
@@ -20,15 +16,19 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
+def get_env(name):
+    return os.environ.get(name, "").strip()
+
+
 def missing_vars():
     missing = []
-    if not GOOGLE_CLIENT_ID:
+    if not get_env("GOOGLE_CLIENT_ID"):
         missing.append("GOOGLE_CLIENT_ID")
-    if not GOOGLE_CLIENT_SECRET:
+    if not get_env("GOOGLE_CLIENT_SECRET"):
         missing.append("GOOGLE_CLIENT_SECRET")
-    if not GOOGLE_REDIRECT_URI:
+    if not get_env("GOOGLE_REDIRECT_URI"):
         missing.append("GOOGLE_REDIRECT_URI")
-    if not app.secret_key:
+    if not get_env("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
     return missing
 
@@ -46,12 +46,26 @@ def home():
     <h1>Sun State Digital Gmail OAuth</h1>
     <p><a href="/connect">Connect Gmail</a></p>
     <p><a href="/health">Health Check</a></p>
+    <p><a href="/debug-env">Debug Env</a></p>
     """
 
 
 @app.route("/health")
 def health():
     return "OK", 200
+
+
+@app.route("/debug-env")
+def debug_env():
+    return f"""
+    <h2>Debug Env</h2>
+    <pre>
+GOOGLE_CLIENT_ID set: {bool(get_env("GOOGLE_CLIENT_ID"))}
+GOOGLE_CLIENT_SECRET set: {bool(get_env("GOOGLE_CLIENT_SECRET"))}
+GOOGLE_REDIRECT_URI: {get_env("GOOGLE_REDIRECT_URI")}
+FLASK_SECRET_KEY set: {bool(get_env("FLASK_SECRET_KEY"))}
+    </pre>
+    """
 
 
 @app.route("/connect")
@@ -67,8 +81,8 @@ def connect():
     session["oauth_state"] = state
 
     params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "client_id": get_env("GOOGLE_CLIENT_ID"),
+        "redirect_uri": get_env("GOOGLE_REDIRECT_URI"),
         "response_type": "code",
         "scope": " ".join(SCOPES),
         "access_type": "offline",
@@ -88,58 +102,32 @@ def oauth_callback():
     error = request.args.get("error")
 
     if error:
-        return f"""
-        <h2>Google returned an error</h2>
-        <pre>{error}</pre>
-        """, 400
+        return f"<pre>{error}</pre>", 400
 
-    if not stored_state or not returned_state or stored_state != returned_state:
-        return """
-        <h2>State mismatch</h2>
-        <p>Please go back and try again.</p>
-        """, 400
+    if not stored_state or stored_state != returned_state:
+        return "State mismatch", 400
 
     if not code:
-        return """
-        <h2>No code returned</h2>
-        <p>Google did not send an authorization code.</p>
-        """, 400
+        return "No code returned", 400
 
     token_data = {
         "code": code,
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "client_id": get_env("GOOGLE_CLIENT_ID"),
+        "client_secret": get_env("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": get_env("GOOGLE_REDIRECT_URI"),
         "grant_type": "authorization_code",
     }
 
-    token_response = requests.post(TOKEN_URL, data=token_data, timeout=30)
+    token_response = requests.post(TOKEN_URL, data=token_data)
 
     if token_response.status_code != 200:
-        return f"""
-        <h2>Token exchange failed</h2>
-        <p>Status: {token_response.status_code}</p>
-        <pre>{token_response.text}</pre>
-        """, 400
+        return f"<pre>{token_response.text}</pre>", 400
 
     token_json = token_response.json()
-    refresh_token = token_json.get("refresh_token")
-    access_token = token_json.get("access_token")
-
-    if not refresh_token:
-        return f"""
-        <h2>No refresh token returned</h2>
-        <p>This usually means Google has already authorized this app before.</p>
-        <p>Remove the app from your Google Account permissions and try again.</p>
-        <pre>{token_json}</pre>
-        """, 400
 
     return f"""
-    <h2>OAuth successful</h2>
-    <p>Copy this refresh token and store it securely:</p>
-    <pre>{refresh_token}</pre>
-    <h3>Access token</h3>
-    <pre>{access_token}</pre>
+    <h2>SUCCESS</h2>
+    <pre>{token_json}</pre>
     """
 
 
