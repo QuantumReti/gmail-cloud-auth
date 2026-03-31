@@ -38,22 +38,54 @@ def create_flow():
 
 @app.route("/")
 def home():
-    return '<a href="/connect">Connect Gmail</a>'
+    return """
+    <h1>Sun State Digital Gmail OAuth</h1>
+    <p><a href="/connect">Connect Gmail</a></p>
+    """
 
 @app.route("/connect")
 def connect():
     flow = create_flow()
-    auth_url, state = flow.authorization_url(
+
+    authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
+
     session["state"] = state
-    return redirect(auth_url)
+    return redirect(authorization_url)
 
 @app.route("/oauth/callback")
-def callback():
+def oauth_callback():
+    expected_state = session.get("state")
+    returned_state = request.args.get("state")
+
+    if expected_state and returned_state and expected_state != returned_state:
+        return "State mismatch. Please try again.", 400
+
     flow = create_flow()
     flow.fetch_token(authorization_response=request.url)
+
     creds = flow.credentials
-    return f"<pre>{creds.refresh_token}</pre>"
+    refresh_token = creds.refresh_token
+
+    if not refresh_token:
+        return (
+            "No refresh token returned. Remove the app from your Google account permissions "
+            "and try again with prompt=consent."
+        ), 400
+
+    return f"""
+    <h2>OAuth successful</h2>
+    <p>Copy this refresh token and store it securely:</p>
+    <pre>{refresh_token}</pre>
+    """
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
