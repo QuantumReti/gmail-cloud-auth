@@ -1,109 +1,66 @@
 from flask import Flask, redirect, request, session
 import os
-import traceback
-from google_auth_oauthlib.flow import Flow
+import secrets
+import requests
+from urllib.parse import urlencode
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret")
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
-def create_flow():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-    if not client_id:
-        raise Exception("Missing GOOGLE_CLIENT_ID")
-    if not client_secret:
-        raise Exception("Missing GOOGLE_CLIENT_SECRET")
-    if not redirect_uri:
-        raise Exception("Missing GOOGLE_REDIRECT_URI")
-
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id": client_id.strip(),
-                "client_secret": client_secret.strip(),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri.strip()],
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=redirect_uri.strip(),
-    )
 
 @app.route("/")
 def home():
-    return """
-    <h1>Sun State Digital Gmail OAuth</h1>
-    <p><a href="/connect">Connect Gmail</a></p>
-    <p><a href="/health">Health Check</a></p>
-    """
+    return '<a href="/connect">Connect Gmail</a>'
 
-@app.route("/connect")
-def connect():
-    try:
-        flow = create_flow()
-
-        authorization_url, state = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-        )
-
-        session["state"] = state
-        return redirect(authorization_url)
-
-    except Exception as e:
-        return f"""
-        <h2>/connect error</h2>
-        <pre>{type(e).__name__}: {str(e)}</pre>
-        <pre>{traceback.format_exc()}</pre>
-        """, 500
-
-@app.route("/oauth/callback")
-def oauth_callback():
-    try:
-        expected_state = session.get("state")
-        returned_state = request.args.get("state")
-
-        if expected_state and returned_state and expected_state != returned_state:
-            return "State mismatch. Please try again.", 400
-
-        flow = create_flow()
-        flow.fetch_token(authorization_response=request.url)
-
-        creds = flow.credentials
-        refresh_token = creds.refresh_token
-
-        if not refresh_token:
-            return (
-                "No refresh token returned. Remove the app from your Google account permissions "
-                "and try again."
-            ), 400
-
-        return f"""
-        <h2>OAuth successful</h2>
-        <p>Copy this refresh token and store it securely:</p>
-        <pre>{refresh_token}</pre>
-        """
-
-    except Exception as e:
-        return f"""
-        <h2>/oauth/callback error</h2>
-        <pre>{type(e).__name__}: {str(e)}</pre>
-        <pre>{traceback.format_exc()}</pre>
-        """, 500
 
 @app.route("/health")
 def health():
     return "OK", 200
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+
+@app.route("/connect")
+def connect():
+    state = secrets.token_urlsafe(32)
+    session["oauth_state"] = state
+
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+
+    return redirect(f"{AUTH_URL}?{urlencode(params)}")
+
+
+@app.route("/oauth/callback")
+def oauth_callback():
+    code = request.args.get("code")
+
+    token_data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+
+    response = requests.post(TOKEN_URL, data=token_data)
+    data = response.json()
+
+    return f"<pre>{data}</pre>"
